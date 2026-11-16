@@ -1,0 +1,54 @@
+name: Verify BundleDrill
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Cold restore and MCP (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Test and package
+        shell: bash
+        run: ./gradlew test installDist distZip --no-daemon --console=plain
+      - name: Generate the warehouse backup drill
+        shell: bash
+        run: build/install/bundledrill/bin/bundledrill demo --out build/warehouse
+      - name: Compare restored branches with a native Git restore
+        run: python checks/native_restore.py --install-dir build/install/bundledrill --demo build/warehouse
+      - name: Install the MCP test client
+        run: python -m pip install --disable-pip-version-check mcp==1.26.0
+      - name: Read every verdict with the official client
+        shell: bash
+        run: |
+          for scenario in broken complete degraded; do
+            python checks/mcp_smoke.py --install-dir build/install/bundledrill --report "build/warehouse/$scenario/report.json"
+          done
+      - name: Save recovery evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: recovery-${{ matrix.os }}
+          path: |
+            build/test-results/test/*.xml
+            build/warehouse/*/report.*
